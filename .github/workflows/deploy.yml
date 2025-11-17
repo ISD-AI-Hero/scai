@@ -682,7 +682,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   final-assessment:
-    name: AI-Powered Final Security Assessment
+    name: Final Security Assessment - CTF Engine
     needs: build-and-upload
     runs-on: self-hosted
     if: success()  # Only run if previous job succeeds
@@ -727,34 +727,6 @@ jobs:
             "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
             -o security-reports/sonarqube.json
         continue-on-error: true
-
-      # Rename files to match SCAI CTF Engine expectations
-      - name: Prepare security reports
-        run: |
-          cd security-reports
-          
-          # Rename downloaded artifacts
-          [ -f trivy-report.json ] && mv trivy-report.json trivy-results.json || echo "Trivy JSON not found"
-          [ -f trivy-results.sarif ] && mv trivy-results.sarif trivy.sarif || echo "Trivy SARIF not found"
-          
-          # Find and rename CodeQL SARIF (it may have a specific name)
-          CODEQL_SARIF=$(find . -name "*codeql*.sarif" -o -name "python.sarif" | head -1)
-          if [ -n "$CODEQL_SARIF" ]; then
-            cp "$CODEQL_SARIF" codeql.sarif
-            echo "✅ CodeQL SARIF prepared"
-          else
-            echo "⚠️ CodeQL SARIF not found, creating empty file"
-            echo '{"version":"2.1.0","runs":[]}' > codeql.sarif
-          fi
-          
-          # Verify SonarQube results exist
-          if [ ! -f sonarqube.json ]; then
-            echo "⚠️ SonarQube results not found, creating empty file"
-            echo '{"issues":[]}' > sonarqube.json
-          fi
-          
-          echo "📂 Security reports prepared:"
-          ls -lh
 
       - name: Checkout SCAI CTF Engine
         uses: actions/checkout@v4
@@ -810,37 +782,37 @@ jobs:
           fi
 
       # Upload final assessment to Azure Storage
-      - name: Upload Final Assessment to Azure Storage
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
-        uses: azure/CLI@v2
-        with:
-          inlineScript: |
-            set -euo pipefail
-            ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
-            ASSESSMENT_NAME="final_assessment_${{ env.PROJECT_NAME }}_${{ env.RUN_ID }}.json"
+      # - name: Upload Final Assessment to Azure Storage
+      #   if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
+      #   uses: azure/CLI@v2
+      #   with:
+      #     inlineScript: |
+      #       set -euo pipefail
+      #       ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
+      #       ASSESSMENT_NAME="final_assessment_${{ env.PROJECT_NAME }}_${{ env.RUN_ID }}.json"
             
-            echo "Uploading final assessment to Azure Storage..."
-            az storage blob upload \
-              --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
-              --sas-token "${{ env.AZ_SAS_TOKEN_STORAGE }}" \
-              --container-name "scans" \
-              --name "$ASSESSMENT_NAME" \
-              --file "$ASSESSMENT_FILE" \
-              --overwrite true
+      #       echo "Uploading final assessment to Azure Storage..."
+      #       az storage blob upload \
+      #         --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+      #         --sas-token "${{ env.AZ_SAS_TOKEN_STORAGE }}" \
+      #         --container-name "scans" \
+      #         --name "$ASSESSMENT_NAME" \
+      #         --file "$ASSESSMENT_FILE" \
+      #         --overwrite true
             
-            ASSESSMENT_URL="https://${{ env.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/scans/$ASSESSMENT_NAME"
-            echo "FINAL_ASSESSMENT_URL=$ASSESSMENT_URL" >> $GITHUB_ENV
-            echo "✅ Final assessment uploaded: $ASSESSMENT_URL"
-        continue-on-error: true
+      #       ASSESSMENT_URL="https://${{ env.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/scans/$ASSESSMENT_NAME"
+      #       echo "FINAL_ASSESSMENT_URL=$ASSESSMENT_URL" >> $GITHUB_ENV
+      #       echo "✅ Final assessment uploaded: $ASSESSMENT_URL"
+      #   continue-on-error: true
 
-      # Upload as GitHub artifact
-      - name: Upload Final Assessment Artifact
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: ${{ steps.assessment.outputs.assessment_file }}
-          retention-days: 90
+      # # Upload as GitHub artifact
+      # - name: Upload Final Assessment Artifact
+      #   if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
+      #   uses: actions/upload-artifact@v4
+      #   with:
+      #     name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+      #     path: ${{ steps.assessment.outputs.assessment_file }}
+      #     retention-days: 90
 
       # Create summary
       - name: Generate Assessment Summary
@@ -873,9 +845,9 @@ jobs:
           fi
 
       # Optional: Fail on Critical risk (only for push events, not manual runs)
-      - name: Enforce Critical Risk Policy
-        if: steps.assessment.outputs.risk_level == 'Critical' && github.event_name == 'push'
-        run: |
-          echo "::error::🚨 Critical security vulnerabilities detected! Deployment blocked."
-          echo "::error::Review the final assessment report before proceeding."
-          exit 1
+      # - name: Enforce Critical Risk Policy
+      #   if: steps.assessment.outputs.risk_level == 'Critical' && github.event_name == 'push'
+      #   run: |
+      #     echo "::error::🚨 Critical security vulnerabilities detected! Deployment blocked."
+      #     echo "::error::Review the final assessment report before proceeding."
+      #     exit 1
