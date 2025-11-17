@@ -543,6 +543,13 @@ jobs:
           name: codeql-database-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
           path: codeql-export/codeql-database-python.tar.gz
 
+      - name: Upload CodeQL SARIF artifact
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('codeql-export/*.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: codeql-export/*.sarif
+
       # ---------- Build RUN JSON AFTER Azure uploads & Deploy ----------
       - name: Ensure jq present (for RUN JSON)
         run: jq --version || (sudo apt-get update -y && sudo apt-get install -y jq)
@@ -673,3 +680,202 @@ jobs:
             echo "codeql database analyze ./codeql-database-python --format=sarif-latest --output=security-results.sarif python-security-and-quality.qls"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  final-assessment:
+    name: AI-Powered Final Security Assessment
+    needs: build-and-upload
+    runs-on: self-hosted
+    if: success()  # Only run if previous job succeeds
+    defaults: { run: { shell: bash } }
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      # Download artifacts from previous job
+      - name: Download CodeQL SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: codeql-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      - name: Download Trivy JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-json-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      - name: Download Trivy SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      # Fetch SonarQube results via API
+      - name: Download SonarQube Results
+        run: |
+          mkdir -p security-reports
+          curl -u "${{ secrets.SONAR_TOKEN }}:" \
+            "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
+            -o security-reports/sonarqube.json
+        continue-on-error: true
+
+      # Rename files to match SCAI CTF Engine expectations
+      - name: Prepare security reports
+        run: |
+          cd security-reports
+          
+          # Rename downloaded artifacts
+          [ -f trivy-report.json ] && mv trivy-report.json trivy-results.json || echo "Trivy JSON not found"
+          [ -f trivy-results.sarif ] && mv trivy-results.sarif trivy.sarif || echo "Trivy SARIF not found"
+          
+          # Find and rename CodeQL SARIF (it may have a specific name)
+          CODEQL_SARIF=$(find . -name "*codeql*.sarif" -o -name "python.sarif" | head -1)
+          if [ -n "$CODEQL_SARIF" ]; then
+            cp "$CODEQL_SARIF" codeql.sarif
+            echo "✅ CodeQL SARIF prepared"
+          else
+            echo "⚠️ CodeQL SARIF not found, creating empty file"
+            echo '{"version":"2.1.0","runs":[]}' > codeql.sarif
+          fi
+          
+          # Verify SonarQube results exist
+          if [ ! -f sonarqube.json ]; then
+            echo "⚠️ SonarQube results not found, creating empty file"
+            echo '{"issues":[]}' > sonarqube.json
+          fi
+          
+          echo "📂 Security reports prepared:"
+          ls -lh
+
+      - name: Checkout SCAI CTF Engine
+        uses: actions/checkout@v4
+        with:
+          repository: ISD-AI-Hero/SCAI.CTF.Engine
+          path: SCAI.CTF.Engine
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Build SCAI CTF Engine
+      - name: Build SCAI CTF Engine
+        run: |
+          cd SCAI.CTF.Engine
+          dotnet publish -c Release -o ../scai-engine
+
+      # Run Final Assessment
+      - name: Run SCAI CTF Engine Final Assessment
+        env:
+          SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
+          SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
+        run: |
+          ./scai-engine/SCAI.CTF.Engine \
+            --CodeQLFilePath security-reports/codeql.sarif \
+            --SonarqubeFilePath security-reports/sonarqube.json \
+            --TrivyFilePath security-reports/trivy.sarif \
+            --OutputPath security-reports \
+            --BuildId ${{ github.run_id }} \
+            --Project ${{ env.PROJECT_NAME }}
+
+      # Parse and check risk level
+      - name: Parse Final Assessment
+        id: assessment
+        run: |
+          FINAL_ASSESSMENT=$(ls -t security-reports/final_assessment_*.json | head -1)
+          
+          if [ -f "$FINAL_ASSESSMENT" ]; then
+            RISK_LEVEL=$(jq -r '.RiskLevel' "$FINAL_ASSESSMENT")
+            VULN_COUNT=$(jq '.Vulnerabilities | length' "$FINAL_ASSESSMENT")
+            CRITICAL_COUNT=$(jq '[.Vulnerabilities[] | select(.RiskLevel == "Critical")] | length' "$FINAL_ASSESSMENT")
+            HIGH_COUNT=$(jq '[.Vulnerabilities[] | select(.RiskLevel == "High")] | length' "$FINAL_ASSESSMENT")
+            
+            echo "risk_level=$RISK_LEVEL" >> $GITHUB_OUTPUT
+            echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+            echo "high_count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+            echo "assessment_file=$FINAL_ASSESSMENT" >> $GITHUB_OUTPUT
+            
+            echo "::notice::Final Risk Level: $RISK_LEVEL"
+            echo "::notice::Total Vulnerabilities: $VULN_COUNT (Critical: $CRITICAL_COUNT, High: $HIGH_COUNT)"
+          else
+            echo "::error::Final assessment file not found!"
+            exit 1
+          fi
+
+      # Upload final assessment to Azure Storage
+      - name: Upload Final Assessment to Azure Storage
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
+            ASSESSMENT_NAME="final_assessment_${{ env.PROJECT_NAME }}_${{ env.RUN_ID }}.json"
+            
+            echo "Uploading final assessment to Azure Storage..."
+            az storage blob upload \
+              --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
+              --sas-token "${{ env.AZ_SAS_TOKEN_STORAGE }}" \
+              --container-name "scans" \
+              --name "$ASSESSMENT_NAME" \
+              --file "$ASSESSMENT_FILE" \
+              --overwrite true
+            
+            ASSESSMENT_URL="https://${{ env.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/scans/$ASSESSMENT_NAME"
+            echo "FINAL_ASSESSMENT_URL=$ASSESSMENT_URL" >> $GITHUB_ENV
+            echo "✅ Final assessment uploaded: $ASSESSMENT_URL"
+        continue-on-error: true
+
+      # Upload as GitHub artifact
+      - name: Upload Final Assessment Artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: ${{ steps.assessment.outputs.assessment_file }}
+          retention-days: 90
+
+      # Create summary
+      - name: Generate Assessment Summary
+        if: always()
+        run: |
+          ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
+          
+          if [ -f "$ASSESSMENT_FILE" ]; then
+            DETERMINATION=$(jq -r '.Determination' "$ASSESSMENT_FILE" | head -c 500)
+            
+            {
+              echo "## 🔒 AI-Powered Security Assessment"
+              echo ""
+              echo "**Overall Risk Level:** \`${{ steps.assessment.outputs.risk_level }}\`"
+              echo "**Project:** ${{ env.PROJECT_NAME }}"
+              echo "**Build:** ${{ env.RUN_ID }}"
+              echo ""
+              echo "### Vulnerability Summary"
+              echo "- **Total Vulnerabilities:** ${{ steps.assessment.outputs.vuln_count }}"
+              echo "- **Critical:** ${{ steps.assessment.outputs.critical_count }}"
+              echo "- **High:** ${{ steps.assessment.outputs.high_count }}"
+              echo ""
+              echo "### AI Assessment Preview"
+              echo "\`\`\`"
+              echo "$DETERMINATION..."
+              echo "\`\`\`"
+              echo ""
+              echo "📊 [Full Assessment Report](${FINAL_ASSESSMENT_URL:-'See artifacts'})"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Optional: Fail on Critical risk (only for push events, not manual runs)
+      - name: Enforce Critical Risk Policy
+        if: steps.assessment.outputs.risk_level == 'Critical' && github.event_name == 'push'
+        run: |
+          echo "::error::🚨 Critical security vulnerabilities detected! Deployment blocked."
+          echo "::error::Review the final assessment report before proceeding."
+          exit 1
