@@ -733,7 +733,7 @@ jobs:
       - name: Checkout SCAI CTF Engine
         uses: actions/checkout@v4
         with:
-          repository: ISD-AI-Hero/SCAI.CTF.Engine
+          repository: ISD-AI-Hero/SCAI_CTF_Engine
           path: SCAI.CTF.Engine
           token: ${{ secrets.SCAI_CTF_PAT }}
 
