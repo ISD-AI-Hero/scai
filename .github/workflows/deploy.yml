@@ -734,8 +734,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ISD-AI-Hero/SCAI_CTF_Engine
-          path: SCAI.CTF.Engine
-          ref: refs/heads/main
+          path: SCAI_CTF_Engine
           token: ${{ secrets.SCAI_CTF_PAT }}
 
       # Build SCAI CTF Engine
