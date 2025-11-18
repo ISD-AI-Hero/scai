@@ -750,18 +750,25 @@ jobs:
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
         run: |
-          # Find the CodeQL SARIF file (could have various names)
-          CODEQL_SARIF=$(find security-reports/ -name "*.sarif" -type f | head -1)
+          echo "=== Downloaded security reports ==="
+          ls -la security-reports/
+          echo ""
+          
+          # CodeQL SARIF is extracted from the artifact zip
+          # The artifact contains files from codeql-export/*.sarif
+          CODEQL_SARIF=$(ls security-reports/*.sarif 2>/dev/null | grep -v trivy | head -1)
+          
           if [ -z "$CODEQL_SARIF" ]; then
-            echo "⚠️ No CodeQL SARIF file found, using empty placeholder"
+            echo "⚠️ No CodeQL SARIF file found, creating empty placeholder"
             CODEQL_SARIF="security-reports/empty-codeql.sarif"
             echo '{"version":"2.1.0","runs":[]}' > "$CODEQL_SARIF"
+          else
+            echo "✓ Found CodeQL SARIF: $CODEQL_SARIF"
           fi
           
-          echo "Using files:"
-          echo "  CodeQL SARIF: $CODEQL_SARIF"
-          echo "  SonarQube JSON: security-reports/sonarqube.json"
-          echo "  Trivy SARIF: security-reports/trivy-results.sarif"
+          echo "✓ Using Trivy SARIF: security-reports/trivy-results.sarif"
+          echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
+          echo ""
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
