@@ -735,7 +735,7 @@ jobs:
         with:
           repository: ISD-AI-Hero/SCAI.CTF.Engine
           path: SCAI.CTF.Engine
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.SCAI_CTF_PAT }}
 
       # Build SCAI CTF Engine
       - name: Build SCAI CTF Engine
