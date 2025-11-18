@@ -740,8 +740,8 @@ jobs:
       # Build SCAI CTF Engine
       - name: Build SCAI CTF Engine
         run: |
-          cd SCAI_CTF_ENGINE/SCAI.CTF.Engine
-          dotnet publish -c Release -o ../scai-engine
+          cd SCAI_CTF_Engine/SCAI.CTF.Engine
+          dotnet publish -c Release -o ../../scai-engine
 
       # Run Final Assessment
       - name: Run SCAI CTF Engine Final Assessment
