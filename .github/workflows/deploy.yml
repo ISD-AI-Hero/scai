@@ -696,6 +696,8 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/.dotnet
 
       # Download artifacts from previous job
       - name: Download CodeQL SARIF
