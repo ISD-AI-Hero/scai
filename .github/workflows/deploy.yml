@@ -735,12 +735,13 @@ jobs:
         with:
           repository: ISD-AI-Hero/SCAI_CTF_Engine
           path: SCAI.CTF.Engine
+          ref: refs/heads/main
           token: ${{ secrets.SCAI_CTF_PAT }}
 
       # Build SCAI CTF Engine
       - name: Build SCAI CTF Engine
         run: |
-          cd SCAI.CTF.Engine
+          cd SCAI_CTF_ENGINE/SCAI.CTF.Engine
           dotnet publish -c Release -o ../scai-engine
 
       # Run Final Assessment
