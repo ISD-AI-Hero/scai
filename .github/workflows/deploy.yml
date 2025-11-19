@@ -766,14 +766,14 @@ jobs:
             echo "✓ Found CodeQL SARIF: $CODEQL_SARIF"
           fi
           
-          echo "✓ Using Trivy SARIF: security-reports/trivy-results.sarif"
+          echo "✓ Using Trivy JSON: security-reports/trivy-report.json"
           echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
           echo ""
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
             --SonarqubeFilePath security-reports/sonarqube.json \
-            --TrivyFilePath security-reports/trivy-results.sarif \
+            --TrivyFilePath security-reports/trivy-report.json \
             --OutputPath security-reports \
             --BuildId ${{ github.run_id }} \
             --Project ${{ env.PROJECT_NAME }}
@@ -827,14 +827,14 @@ jobs:
       #       echo "✅ Final assessment uploaded: $ASSESSMENT_URL"
       #   continue-on-error: true
 
-      # # Upload as GitHub artifact
-      # - name: Upload Final Assessment Artifact
-      #   if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-      #     path: ${{ steps.assessment.outputs.assessment_file }}
-      #     retention-days: 90
+      # Upload as GitHub artifact
+      - name: Upload Final Assessment Artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: ${{ steps.assessment.outputs.assessment_file }}
+          retention-days: 90
 
       # Create summary
       - name: Generate Assessment Summary
