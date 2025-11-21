@@ -819,7 +819,7 @@ jobs:
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
-              --container-name "${{ steps.cfg.outputs.cn_scan || 'scans' }}" \
+              --container-name "scans" \
               --name "$ASSESSMENT_NAME" \
               --file "$ASSESSMENT_FILE" \
               --overwrite true
