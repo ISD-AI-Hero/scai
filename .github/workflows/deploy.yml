@@ -813,19 +813,19 @@ jobs:
             ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
             ASSESSMENT_NAME="final_assessment_${{ env.PROJECT_NAME }}_${{ env.RUN_ID }}.json"
             
-            echo "Uploading final assessment to Azure Storage..."
+            echo "Assessment File: $ASSESSMENT_FILE"
+            echo "Assessment Name: $ASSESSMENT_NAME"
+            
             az storage blob upload \
-              --account-name "${{ env.AZURE_STORAGE_ACCOUNT }}" \
-              --sas-token "${{ env.AZ_SAS_TOKEN_STORAGE }}" \
-              --container-name "scans" \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "${{ steps.cfg.outputs.cn_scan || 'scans' }}" \
               --name "$ASSESSMENT_NAME" \
               --file "$ASSESSMENT_FILE" \
               --overwrite true
             
-            ASSESSMENT_URL="https://${{ env.AZURE_STORAGE_ACCOUNT }}.blob.core.windows.net/scans/$ASSESSMENT_NAME"
-            echo "FINAL_ASSESSMENT_URL=$ASSESSMENT_URL" >> $GITHUB_ENV
-            echo "✅ Final assessment uploaded: $ASSESSMENT_URL"
-        continue-on-error: true
+            echo "✅ Final assessment uploaded successfully"
+        continue-on-error: false
 
       # Upload as GitHub artifact
       - name: Upload Final Assessment Artifact
