@@ -58,7 +58,7 @@ env:
   TRIVY_IGNORE_UNFIXED: true
 
   # Names & IDs
-  PROJECT_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.project_name || vars.PROJECT_NAME || github.event.repository.name }}
+  PROJECT_NAME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.project_name || vars.PROJECT_NAME || github.event.repository.name }}
   RUN_ID:       ${{ github.run_id }}
   RUN_NUMBER:   ${{ github.run_number }}
 
@@ -504,17 +504,6 @@ jobs:
         with:
           name: swft-run-json-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
           path: run.json
-
-      - name: Azure upload summary
-        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
-        run: |
-          {
-            echo "### Azure uploads"
-            echo ""
-            echo "- SBOM:  ${SBOM_URL:-'(n/a)'}"
-            echo "- Trivy: ${TRIVY_URL:-'(n/a)'}"
-            echo "- Run JSON: ${RUN_JSON_URL:-'(n/a)'}"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Azure upload summary
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
