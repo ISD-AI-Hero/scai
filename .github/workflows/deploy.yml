@@ -807,14 +807,37 @@ jobs:
       - name: Upload Final Assessment to Azure Storage
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
         uses: azure/CLI@v2
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ env.AZURE_STORAGE_ACCOUNT }}
+          AZ_SAS_TOKEN_STORAGE: ${{ env.AZ_SAS_TOKEN_STORAGE }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          RUN_ID: ${{ env.RUN_ID }}
         with:
           inlineScript: |
             set -euo pipefail
+            
+            # Debug environment variables
+            echo "=== Debugging Azure Environment Variables ==="
+            echo "AZURE_STORAGE_ACCOUNT: ${AZURE_STORAGE_ACCOUNT:-'NOT SET'}"
+            echo "AZ_SAS_TOKEN_STORAGE length: ${#AZ_SAS_TOKEN_STORAGE}"
+            echo "PROJECT_NAME: ${PROJECT_NAME:-'NOT SET'}"
+            echo "RUN_ID: ${RUN_ID:-'NOT SET'}"
+            echo ""
+            
             ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
-            ASSESSMENT_NAME="final_assessment_${{ env.PROJECT_NAME }}_${{ env.RUN_ID }}.json"
+            ASSESSMENT_NAME="final_assessment_${PROJECT_NAME}_${RUN_ID}.json"
             
             echo "Assessment File: $ASSESSMENT_FILE"
             echo "Assessment Name: $ASSESSMENT_NAME"
+            
+            # Verify file exists
+            if [ ! -f "$ASSESSMENT_FILE" ]; then
+              echo "::error::Assessment file not found: $ASSESSMENT_FILE"
+              exit 1
+            fi
+            
+            echo "File size: $(stat -f%z "$ASSESSMENT_FILE" 2>/dev/null || stat -c%s "$ASSESSMENT_FILE" 2>/dev/null || echo 'unknown')"
+            echo ""
             
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
