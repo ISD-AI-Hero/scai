@@ -389,6 +389,8 @@ jobs:
 
       - name: Cosign sign SBOM (sbom.cyclonedx.json)
         if: hashFiles('sbom.cyclonedx.json') != ''
+        env:
+          COSIGN_YES: "true"
         run: |
           set -euo pipefail
           ARTIFACT="sbom.cyclonedx.json"
@@ -422,6 +424,8 @@ jobs:
 
       - name: Cosign sign Trivy JSON (trivy-report.json)
         if: hashFiles('trivy-report.json') != ''
+        env:
+          COSIGN_YES: "true"
         run: |
           set -euo pipefail
           ARTIFACT="trivy-report.json"
@@ -451,6 +455,8 @@ jobs:
       
       - name: Cosign sign Trivy SARIF (trivy-results.sarif)
         if: hashFiles('trivy-results.sarif') != ''
+        env:
+          COSIGN_YES: "true"
         run: |
           set -euo pipefail
           ARTIFACT="trivy-results.sarif"
