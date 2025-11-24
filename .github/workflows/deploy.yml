@@ -500,6 +500,9 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
+
             echo "Uploading SBOM to Azure Storage..."
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
@@ -517,6 +520,8 @@ jobs:
           inlineScript: |
             set -euo pipefail
             echo "Uploading Trivy report to Azure Storage..."
+            az cloud set --name AzureUSGovernment
+            az cloud show
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
@@ -536,6 +541,8 @@ jobs:
             cp "codeql-export/codeql-database-python.tar.gz" "${CODEQL_DB_FILE}"
             
             echo "Uploading CodeQL database to Azure Storage..."
+            az cloud set --name AzureUSGovernment
+            az cloud show
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
@@ -667,6 +674,8 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
             echo "Uploading run.json to Azure Storage..."
             test -s run.json || { echo "Error: run.json not found or empty"; pwd; ls -la; exit 2; }
             az storage blob upload \
@@ -850,6 +859,10 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
+
+            #Set to goverment cloud
+            az cloud set --name AzureUSGovernment
+            az cloud show
             
             # Debug environment variables
             echo "=== Debugging Azure Environment Variables ==="
