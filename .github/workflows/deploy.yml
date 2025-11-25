@@ -39,6 +39,34 @@ on:
         description: "Fail the workflow if Cosign verify fails"
         type: boolean
         default: true
+      enable_vexllm:
+        description: "Enable VEX LLM processing to filter non-exploitable vulnerabilities"
+        type: boolean
+        default: true
+      vexllm_hint:
+        description: "VEX LLM hint text (comma-separated for multiple hints, e.g., 'containerized app,isolated environment')"
+        type: string
+        required: false
+      vexllm_hint_not_server:
+        description: "Hint: application is not a server program"
+        type: boolean
+        default: false
+      vexllm_hint_compromise_availability:
+        description: "Hint: can compromise on availability (focus on Confidentiality/Integrity)"
+        type: boolean
+        default: false
+      vexllm_hint_used_commands:
+        description: "Hint: comma-separated list of used commands (e.g., python3,node)"
+        type: string
+        required: false
+      vexllm_hint_unused_commands:
+        description: "Hint: comma-separated list of unused commands (e.g., git,wget,curl)"
+        type: string
+        required: false
+      include_suppressed_vex:
+        description: "Include suppressed VEX vulnerabilities in final assessment output (default: false, suppressed findings excluded)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -422,6 +450,87 @@ jobs:
           set -euo pipefail
           test -s "trivy-report.json" || { echo "Trivy JSON not created"; ls -la; exit 2; }
 
+      - name: Set up Go (for vexLLM)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install vexLLM
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
+        run: go install github.com/AkihiroSuda/vexllm/cmd/vexllm@latest
+
+      - name: Add Go bin to PATH
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Generate VEX with vexLLM
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4o-mini' }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+        run: |
+          set -euo pipefail
+          
+          # Build hint flags
+          VEX_FLAGS=""
+          
+          # Add arbitrary text hints (supports multiple comma-separated)
+          if [ -n "${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint || '' }}" ]; then
+            HINT_INPUT="${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint || '' }}"
+            IFS=',' read -ra HINTS <<< "$HINT_INPUT"
+            for hint in "${HINTS[@]}"; do
+              # Trim whitespace and add as hint flag
+              hint_trimmed=$(echo "$hint" | xargs)
+              if [ -n "$hint_trimmed" ]; then
+                VEX_FLAGS="$VEX_FLAGS --hint \"$hint_trimmed\""
+              fi
+            done
+          fi
+          
+          # Add boolean hints
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_not_server || 'false' }}" = "true" ]; then
+            VEX_FLAGS="$VEX_FLAGS --hint-not-server"
+          fi
+          
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_compromise_availability || 'false' }}" = "true" ]; then
+            VEX_FLAGS="$VEX_FLAGS --hint-compromise-on-availability"
+          fi
+          
+          # Add used commands
+          if [ -n "${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_used_commands || '' }}" ]; then
+            VEX_FLAGS="$VEX_FLAGS --hint-used-commands=${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_used_commands || '' }}"
+          fi
+          
+          # Add unused commands
+          if [ -n "${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_unused_commands || '' }}" ]; then
+            VEX_FLAGS="$VEX_FLAGS --hint-unused-commands=${{ github.event_name == 'workflow_dispatch' && inputs.vexllm_hint_unused_commands || '' }}"
+          fi
+          
+          # Generate OpenVEX format
+          echo "Generating OpenVEX document with vexLLM..."
+          vexllm generate trivy-report.json vex-output.openvex \
+            --output-format=openvex \
+            --llm=openai \
+            $VEX_FLAGS
+          
+          # Verify output was created
+          if [ ! -f "vex-output.openvex" ]; then
+            echo "Error: VEX file was not generated"
+            exit 1
+          fi
+          
+          # Validate JSON structure (basic check)
+          if ! jq empty vex-output.openvex 2>/dev/null; then
+            echo "Error: Generated VEX file is not valid JSON"
+            exit 1
+          fi
+          
+          echo "✓ VEX file generated successfully"
+          echo "  File: vex-output.openvex"
+          echo "  Statements: $(jq '.statements | length' vex-output.openvex 2>/dev/null || echo 'unknown')"
+
       - name: Cosign sign Trivy JSON (trivy-report.json)
         if: hashFiles('trivy-report.json') != ''
         env:
@@ -598,6 +707,13 @@ jobs:
           name: codeql-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
           path: codeql-export/*.sarif
 
+      - name: Upload VEX OpenVEX artifact
+        if: ${{ always() && (github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false'))) && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('vex-output.openvex') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vex-openvex-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: vex-output.openvex
+
       # ---------- Build RUN JSON AFTER Azure uploads & Deploy ----------
       - name: Ensure jq present (for RUN JSON)
         run: jq --version || (sudo apt-get update -y && sudo apt-get install -y jq)
@@ -771,6 +887,13 @@ jobs:
           path: security-reports/
         continue-on-error: true
 
+      - name: Download VEX OpenVEX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: vex-openvex-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
       # Fetch SonarQube results via API
       - name: Download SonarQube Results
         run: |
@@ -818,15 +941,39 @@ jobs:
           
           echo "✓ Using Trivy JSON: security-reports/trivy-report.json"
           echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
+          
+          # Check for VEX file
+          VEX_FILE=""
+          if [ -f "security-reports/vex-output.openvex" ]; then
+            VEX_FILE="security-reports/vex-output.openvex"
+            echo "✓ Using VEX file: $VEX_FILE"
+            echo "  VEX statements: $(jq '.statements | length' $VEX_FILE 2>/dev/null || echo 'unknown')"
+          else
+            echo "⚠ No VEX file found, processing all vulnerabilities"
+          fi
+          
+          # Build CTF Engine command with base parameters
+          CTF_ENGINE_ARGS=(
+            --CodeQLFilePath "$CODEQL_SARIF"
+            --SonarqubeFilePath security-reports/sonarqube.json
+            --TrivyFilePath security-reports/trivy-report.json
+            --OutputPath security-reports
+            --BuildId ${{ github.run_id }}
+            --Project ${{ env.PROJECT_NAME }}
+            --VexFilePath "${VEX_FILE:-}"
+          )
+          
+          # Add include-suppressed-vex flag if enabled
+          if [ "${{ github.event_name == 'workflow_dispatch' && inputs.include_suppressed_vex || 'false' }}" = "true" ]; then
+            CTF_ENGINE_ARGS+=(--include-suppressed-vex)
+            echo "✓ Including suppressed VEX vulnerabilities in output"
+          else
+            echo "✓ Suppressed VEX vulnerabilities will be excluded (default)"
+          fi
           echo ""
           
-          ./scai-engine/SCAI.CTF.Engine \
-            --CodeQLFilePath "$CODEQL_SARIF" \
-            --SonarqubeFilePath security-reports/sonarqube.json \
-            --TrivyFilePath security-reports/trivy-report.json \
-            --OutputPath security-reports \
-            --BuildId ${{ github.run_id }} \
-            --Project ${{ env.PROJECT_NAME }}
+          # Execute CTF Engine
+          ./scai-engine/SCAI.CTF.Engine "${CTF_ENGINE_ARGS[@]}"
 
       # Parse and check risk level
       - name: Parse Final Assessment
