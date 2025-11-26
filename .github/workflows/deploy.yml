@@ -195,16 +195,16 @@ jobs:
           echo "This is a test project with intentional vulnerabilities for security scanning validation."
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: python
           source-root: .  # adjust if your code is in a subfolder
 
       - name: Autobuild (CodeQL)
-        uses: github/codeql-action/autobuild@v3
+        uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "security"  # label for SARIF results
 
@@ -340,25 +340,25 @@ jobs:
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.9.0
 
-      - name: Sign image (keyless)
-        env:
-          COSIGN_EXPERIMENTAL: 1  # Enable keyless signing
+      - name: Decode Cosign keys
         run: |
-          set +e
-          REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
-          echo "🔑 Attempting to sign image using keyless mode: $REF"
-          
-          # Sign using keyless mode (will open browser for OIDC auth)
-          if cosign sign "$REF"; then
-              echo "✅ Image signed successfully using keyless mode"
-          else
-              SIGN_STATUS=$?
-              echo "⚠️  Warning: Failed to sign image (exit code $SIGN_STATUS)"
-              # Continue workflow even if signing fails
-              exit 0
-          fi
+          set -euo pipefail
+          echo "${{ secrets.COSIGN_KEY_B64 }}" | base64 -d > cosign.key
+          echo "${{ secrets.COSIGN_PUB_KEY_B64 }}" | base64 -d > cosign.pub
+          chmod 600 cosign.key
+          chmod 644 cosign.pub
 
-      - name: Verify image signature (keyless)
+
+      - name: Sign image (keyed)
+        run: |
+          set -euo pipefail
+          REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+          echo "🔑 Signing image with cosign key: $REF"
+          cosign sign --key cosign.key "$REF"
+          echo "COSIGN_VERIFY_STATUS=signed" >> $GITHUB_ENV
+
+
+      - name: Verify image signature (keyed)
         run: |
           set +e
           REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
@@ -380,11 +380,26 @@ jobs:
           format:       cyclonedx-json
           output-file:  sbom.cyclonedx.json
           upload-artifact: false
+      
 
       - name: Verify SBOM exists
         run: |
           set -euo pipefail
           test -s "sbom.cyclonedx.json" || { echo "SBOM not created"; ls -la; exit 2; }
+
+      - name: Cosign sign SBOM (sbom.cyclonedx.json)
+        if: hashFiles('sbom.cyclonedx.json') != ''
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          ARTIFACT="sbom.cyclonedx.json"
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature "${ARTIFACT}.sig" \
+            "${ARTIFACT}"
+          ls -l "${ARTIFACT}.sig"
+
 
       - name: Run Trivy vulnerability scanner (JSON)
         uses: aquasecurity/trivy-action@0.33.1
@@ -407,6 +422,19 @@ jobs:
           set -euo pipefail
           test -s "trivy-report.json" || { echo "Trivy JSON not created"; ls -la; exit 2; }
 
+      - name: Cosign sign Trivy JSON (trivy-report.json)
+        if: hashFiles('trivy-report.json') != ''
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          ARTIFACT="trivy-report.json"
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature "${ARTIFACT}.sig" \
+            "${ARTIFACT}"
+          ls -l "${ARTIFACT}.sig"
+
       - name: Generate Trivy SARIF
         uses: aquasecurity/trivy-action@0.33.1
         with:
@@ -424,6 +452,19 @@ jobs:
         run: |
           set -euo pipefail
           test -s "trivy-results.sarif" || { echo "Trivy SARIF not created"; ls -la; exit 2; }
+      
+      - name: Cosign sign Trivy SARIF (trivy-results.sarif)
+        if: hashFiles('trivy-results.sarif') != ''
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          ARTIFACT="trivy-results.sarif"
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature "${ARTIFACT}.sig" \
+            "${ARTIFACT}"
+          ls -l "${ARTIFACT}.sig"
 
       - name: Ensure jq present (for policy)
         run: jq --version || (sudo apt-get update -y && sudo apt-get install -y jq)
@@ -453,7 +494,7 @@ jobs:
           fi
 
       - name: Upload SARIF to GitHub Security
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy-results.sarif
         # category intentionally omitted (single SARIF)
@@ -465,6 +506,9 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
+
             echo "Uploading SBOM to Azure Storage..."
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
@@ -482,6 +526,8 @@ jobs:
           inlineScript: |
             set -euo pipefail
             echo "Uploading Trivy report to Azure Storage..."
+            az cloud set --name AzureUSGovernment
+            az cloud show
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
@@ -501,6 +547,8 @@ jobs:
             cp "codeql-export/codeql-database-python.tar.gz" "${CODEQL_DB_FILE}"
             
             echo "Uploading CodeQL database to Azure Storage..."
+            az cloud set --name AzureUSGovernment
+            az cloud show
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
@@ -542,6 +590,13 @@ jobs:
         with:
           name: codeql-database-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
           path: codeql-export/codeql-database-python.tar.gz
+
+      - name: Upload CodeQL SARIF artifact
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('codeql-export/*.sarif') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: codeql-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: codeql-export/*.sarif
 
       # ---------- Build RUN JSON AFTER Azure uploads & Deploy ----------
       - name: Ensure jq present (for RUN JSON)
@@ -625,6 +680,8 @@ jobs:
         with:
           inlineScript: |
             set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
             echo "Uploading run.json to Azure Storage..."
             test -s run.json || { echo "Error: run.json not found or empty"; pwd; ls -la; exit 2; }
             az storage blob upload \
@@ -673,3 +730,223 @@ jobs:
             echo "codeql database analyze ./codeql-database-python --format=sarif-latest --output=security-results.sarif python-security-and-quality.qls"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  final-assessment:
+    name: Final Security Assessment - CTF Engine
+    needs: build-and-upload
+    runs-on: self-hosted
+    if: success()  # Only run if previous job succeeds
+    defaults: { run: { shell: bash } }
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.temp }}/.dotnet
+
+      # Download artifacts from previous job
+      - name: Download CodeQL SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: codeql-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      - name: Download Trivy JSON
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-json-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      - name: Download Trivy SARIF
+        uses: actions/download-artifact@v4
+        with:
+          name: trivy-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: security-reports/
+        continue-on-error: true
+
+      # Fetch SonarQube results via API
+      - name: Download SonarQube Results
+        run: |
+          mkdir -p security-reports
+          curl -u "${{ secrets.SONAR_TOKEN }}:" \
+            "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
+            -o security-reports/sonarqube.json
+        continue-on-error: true
+
+      - name: Checkout SCAI CTF Engine
+        uses: actions/checkout@v4
+        with:
+          repository: ISD-AI-Hero/SCAI_CTF_Engine
+          path: SCAI_CTF_Engine
+          token: ${{ secrets.SCAI_CTF_PAT }}
+
+      # Build SCAI CTF Engine
+      - name: Build SCAI CTF Engine
+        run: |
+          cd SCAI_CTF_Engine/SCAI.CTF.Engine
+          dotnet publish -c Release -o ../../scai-engine
+
+      # Run Final Assessment
+      - name: Run SCAI CTF Engine Final Assessment
+        env:
+          SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
+          SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
+        run: |
+          echo "=== Downloaded security reports ==="
+          ls -la security-reports/
+          echo ""
+          
+          # CodeQL SARIF is extracted from the artifact zip
+          # The artifact contains files from codeql-export/*.sarif
+          CODEQL_SARIF=$(ls security-reports/*.sarif 2>/dev/null | grep -v trivy | head -1)
+          
+          if [ -z "$CODEQL_SARIF" ]; then
+            echo "⚠️ No CodeQL SARIF file found, creating empty placeholder"
+            CODEQL_SARIF="security-reports/empty-codeql.sarif"
+            echo '{"version":"2.1.0","runs":[]}' > "$CODEQL_SARIF"
+          else
+            echo "✓ Found CodeQL SARIF: $CODEQL_SARIF"
+          fi
+          
+          echo "✓ Using Trivy JSON: security-reports/trivy-report.json"
+          echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
+          echo ""
+          
+          ./scai-engine/SCAI.CTF.Engine \
+            --CodeQLFilePath "$CODEQL_SARIF" \
+            --SonarqubeFilePath security-reports/sonarqube.json \
+            --TrivyFilePath security-reports/trivy-report.json \
+            --OutputPath security-reports \
+            --BuildId ${{ github.run_id }} \
+            --Project ${{ env.PROJECT_NAME }}
+
+      # Parse and check risk level
+      - name: Parse Final Assessment
+        id: assessment
+        run: |
+          FINAL_ASSESSMENT=$(ls -t security-reports/final_assessment_*.json | head -1)
+          
+          if [ -f "$FINAL_ASSESSMENT" ]; then
+            RISK_LEVEL=$(jq -r '.RiskLevel' "$FINAL_ASSESSMENT")
+            VULN_COUNT=$(jq '.Vulnerabilities | length' "$FINAL_ASSESSMENT")
+            CRITICAL_COUNT=$(jq '[.Vulnerabilities[] | select(.RiskLevel == "Critical")] | length' "$FINAL_ASSESSMENT")
+            HIGH_COUNT=$(jq '[.Vulnerabilities[] | select(.RiskLevel == "High")] | length' "$FINAL_ASSESSMENT")
+            
+            echo "risk_level=$RISK_LEVEL" >> $GITHUB_OUTPUT
+            echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+            echo "high_count=$HIGH_COUNT" >> $GITHUB_OUTPUT
+            echo "assessment_file=$FINAL_ASSESSMENT" >> $GITHUB_OUTPUT
+            
+            echo "::notice::Final Risk Level: $RISK_LEVEL"
+            echo "::notice::Total Vulnerabilities: $VULN_COUNT (Critical: $CRITICAL_COUNT, High: $HIGH_COUNT)"
+          else
+            echo "::error::Final assessment file not found!"
+            exit 1
+          fi
+
+      # Upload final assessment to Azure Storage
+      - name: Upload Final Assessment to Azure Storage
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
+        uses: azure/CLI@v2
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ env.AZURE_STORAGE_ACCOUNT }}
+          AZ_SAS_TOKEN_STORAGE: ${{ env.AZ_SAS_TOKEN_STORAGE }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          RUN_ID: ${{ env.RUN_ID }}
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            #Set to goverment cloud
+            az cloud set --name AzureUSGovernment
+            az cloud show
+            
+            # Debug environment variables
+            echo "=== Debugging Azure Environment Variables ==="
+            echo "AZURE_STORAGE_ACCOUNT: ${AZURE_STORAGE_ACCOUNT:-'NOT SET'}"
+            echo "AZ_SAS_TOKEN_STORAGE length: ${#AZ_SAS_TOKEN_STORAGE}"
+            echo "PROJECT_NAME: ${PROJECT_NAME:-'NOT SET'}"
+            echo "RUN_ID: ${RUN_ID:-'NOT SET'}"
+            echo ""
+            
+            ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
+            ASSESSMENT_NAME="final_assessment_${PROJECT_NAME}_${RUN_ID}.json"
+            
+            echo "Assessment File: $ASSESSMENT_FILE"
+            echo "Assessment Name: $ASSESSMENT_NAME"
+            
+            # Verify file exists
+            if [ ! -f "$ASSESSMENT_FILE" ]; then
+              echo "::error::Assessment file not found: $ASSESSMENT_FILE"
+              exit 1
+            fi
+            
+            echo "File size: $(stat -f%z "$ASSESSMENT_FILE" 2>/dev/null || stat -c%s "$ASSESSMENT_FILE" 2>/dev/null || echo 'unknown')"
+            echo ""
+            
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "scans" \
+              --name "$ASSESSMENT_NAME" \
+              --file "$ASSESSMENT_FILE" \
+              --overwrite true
+            
+            echo "✅ Final assessment uploaded successfully"
+        continue-on-error: false
+
+      # Upload as GitHub artifact
+      - name: Upload Final Assessment Artifact
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_artifacts == true || github.event_name != 'workflow_dispatch' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-assessment-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
+          path: ${{ steps.assessment.outputs.assessment_file }}
+          retention-days: 90
+
+      # Create summary
+      - name: Generate Assessment Summary
+        if: always()
+        run: |
+          ASSESSMENT_FILE="${{ steps.assessment.outputs.assessment_file }}"
+          
+          if [ -f "$ASSESSMENT_FILE" ]; then
+            DETERMINATION=$(jq -r '.Determination' "$ASSESSMENT_FILE" | head -c 500)
+            
+            {
+              echo "## 🔒 AI-Powered Security Assessment"
+              echo ""
+              echo "**Overall Risk Level:** \`${{ steps.assessment.outputs.risk_level }}\`"
+              echo "**Project:** ${{ env.PROJECT_NAME }}"
+              echo "**Build:** ${{ env.RUN_ID }}"
+              echo ""
+              echo "### Vulnerability Summary"
+              echo "- **Total Vulnerabilities:** ${{ steps.assessment.outputs.vuln_count }}"
+              echo "- **Critical:** ${{ steps.assessment.outputs.critical_count }}"
+              echo "- **High:** ${{ steps.assessment.outputs.high_count }}"
+              echo ""
+              echo "### AI Assessment Preview"
+              echo "\`\`\`"
+              echo "$DETERMINATION..."
+              echo "\`\`\`"
+              echo ""
+              echo "📊 [Full Assessment Report](${FINAL_ASSESSMENT_URL:-'See artifacts'})"
+            } >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # Optional: Fail on Critical risk (only for push events, not manual runs)
+      - name: Enforce Critical Risk Policy
+        if: steps.assessment.outputs.risk_level == 'Critical' && github.event_name == 'push'
+        run: |
+          echo "::error::🚨 Critical security vulnerabilities detected! Deployment blocked."
+          echo "::error::Review the final assessment report before proceeding."
+          exit 1
