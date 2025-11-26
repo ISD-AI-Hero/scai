@@ -274,6 +274,14 @@ jobs:
             echo "CODEQL_DB_FILE=${FILE_PREFIX}-codeql-db.tar.gz"
             echo "DEPLOY_FILE=${FILE_PREFIX}-deploy.txt"
             echo "RUN_JSON_FILE=${FILE_PREFIX}-run.json"
+
+            # Override the generic names so all later steps use run-scoped filenames
+            echo "SBOM_SRC=${FILE_PREFIX}-sbom.cyclonedx.json"
+            echo "TRIVY_SRC=${FILE_PREFIX}-trivy-report.json"
+            echo "SARIF_SRC=${FILE_PREFIX}-trivy-results.sarif"
+            echo "RUNJSON_SRC=${FILE_PREFIX}-run.json"
+
+
             echo "ACTIONS_RUN_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}"
             echo "RUN_TIMESTAMP=$(date -u +%FT%TZ)"
           } >> $GITHUB_ENV
@@ -364,7 +372,7 @@ jobs:
           REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           echo "🔍 Verifying image signature: $REF"
           
-          if cosign verify "$REF"; then
+          if cosign verify --key cosign.pub "$REF"; then
               echo "✅ Image signature verification passed"
               echo "COSIGN_VERIFY_STATUS=passed" >> $GITHUB_ENV
           else
@@ -378,22 +386,22 @@ jobs:
         with:
           image:        ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format:       cyclonedx-json
-          output-file:  sbom.cyclonedx.json
+          output-file:  ${{ env.SBOM_SRC }}
           upload-artifact: false
-      
+       
 
       - name: Verify SBOM exists
         run: |
           set -euo pipefail
-          test -s "sbom.cyclonedx.json" || { echo "SBOM not created"; ls -la; exit 2; }
+          test -s "${SBOM_SRC}" || { echo "SBOM not created"; ls -la; exit 2; }
 
-      - name: Cosign sign SBOM (sbom.cyclonedx.json)
-        if: hashFiles('sbom.cyclonedx.json') != ''
+      - name: Cosign sign SBOM (sbom)
+        if: ${{ hashFiles(env.SBOM_SRC) != '' }}
         env:
           COSIGN_YES: "true"
         run: |
           set -euo pipefail
-          ARTIFACT="sbom.cyclonedx.json"
+          ARTIFACT="${SBOM_SRC}"
           cosign sign-blob \
             --key cosign.key \
             --output-signature "${ARTIFACT}.sig" \
@@ -411,7 +419,7 @@ jobs:
           scan-type: 'image'
           image-ref: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: 'json'
-          output: trivy-report.json
+          output: ${{ env.TRIVY_SRC }}
           severity: ${{ steps.cfg.outputs.scan_levels }}
           ignore-unfixed: ${{ steps.cfg.outputs.ignore_unfixed }}
           scanners: 'vuln'
@@ -420,15 +428,15 @@ jobs:
       - name: Verify Trivy JSON exists
         run: |
           set -euo pipefail
-          test -s "trivy-report.json" || { echo "Trivy JSON not created"; ls -la; exit 2; }
+          test -s "${TRIVY_SRC}" || { echo "Trivy JSON not created"; ls -la; exit 2; }
 
-      - name: Cosign sign Trivy JSON (trivy-report.json)
-        if: hashFiles('trivy-report.json') != ''
+      - name: Cosign sign Trivy JSON
+        if: ${{ hashFiles(env.TRIVY_SRC) != '' }}
         env:
           COSIGN_YES: "true"
         run: |
           set -euo pipefail
-          ARTIFACT="trivy-report.json"
+          ARTIFACT="${TRIVY_SRC}"
           cosign sign-blob \
             --key cosign.key \
             --output-signature "${ARTIFACT}.sig" \
@@ -442,7 +450,7 @@ jobs:
           scan-type: 'image'
           image-ref: ${{ env.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
           format: 'sarif'
-          output: trivy-results.sarif
+          output: ${{ env.SARIF_SRC }}
           severity: ${{ steps.cfg.outputs.scan_levels }}
           ignore-unfixed: ${{ steps.cfg.outputs.ignore_unfixed }}
           scanners: 'vuln'
@@ -451,15 +459,15 @@ jobs:
       - name: Verify Trivy SARIF exists
         run: |
           set -euo pipefail
-          test -s "trivy-results.sarif" || { echo "Trivy SARIF not created"; ls -la; exit 2; }
+          test -s "${SARIF_SRC}" || { echo "Trivy SARIF not created"; ls -la; exit 2; }
       
-      - name: Cosign sign Trivy SARIF (trivy-results.sarif)
-        if: hashFiles('trivy-results.sarif') != ''
+      - name: Cosign sign Trivy SARIF
+        if: ${{ hashFiles(env.SARIF_SRC) != '' }}
         env:
           COSIGN_YES: "true"
         run: |
           set -euo pipefail
-          ARTIFACT="trivy-results.sarif"
+          ARTIFACT="${SARIF_SRC}"
           cosign sign-blob \
             --key cosign.key \
             --output-signature "${ARTIFACT}.sig" \
@@ -480,12 +488,12 @@ jobs:
             [ .Results[].Vulnerabilities[]? as $v
               | ($sev | split(",")) as $levels
               | select($levels | index($v.Severity))
-            ] | length' "trivy-report.json")
+            ] | length' "${TRIVY_SRC}")
           FAIL_COUNT=$(jq --arg sev "$FAIL_LEVELS" '
             [ .Results[].Vulnerabilities[]? as $v
               | ($sev | split(",")) as $levels
               | select($levels | index($v.Severity))
-            ] | length' "trivy-report.json")
+            ] | length' "${TRIVY_SRC}")
           echo "TRIVY_FINDINGS_TOTAL=$TOTAL_COUNT" >> $GITHUB_ENV
           echo "TRIVY_FINDINGS_FAILSET=$FAIL_COUNT" >> $GITHUB_ENV
           if [ "$POLICY_FAIL_ON_TRIVY" = "true" ] && [ "$FAIL_COUNT" -gt 0 ]; then
@@ -496,12 +504,12 @@ jobs:
       - name: Upload SARIF to GitHub Security
         uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-results.sarif
+          sarif_file: ${{ env.SARIF_SRC }}
         # category intentionally omitted (single SARIF)
 
       # ---------- Azure uploads (work on push and manual; FLAT filenames) ----------
       - name: Upload SBOM to Azure Storage (SAS)
-        if: ${{ steps.validate_azure.outputs.upload_to_azure == 'true' }}
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
         uses: azure/CLI@v2
         with:
           inlineScript: |
@@ -514,13 +522,13 @@ jobs:
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "${{ steps.cfg.outputs.cn_sbom || 'sboms' }}" \
-              --name "${{ env.SBOM_SRC }}" \
-              --file "${{ env.SBOM_SRC }}" \
+              --name "${SBOM_SRC}" \
+              --file "${SBOM_SRC}" \
               --overwrite true
             echo "SBOM uploaded successfully"
 
       - name: Upload Trivy report to Azure Storage (flat name)
-        if: ${{ steps.validate_azure.outputs.upload_to_azure == 'true' }}
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
         uses: azure/CLI@v2
         with:
           inlineScript: |
@@ -532,13 +540,13 @@ jobs:
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "${{ steps.cfg.outputs.cn_scan || 'scans' }}" \
-              --name "${{ env.TRIVY_SRC }}" \
-              --file "${{ env.TRIVY_SRC }}" \
+              --name "${TRIVY_SRC}" \
+              --file "${TRIVY_SRC}" \
               --overwrite true
             echo "Trivy report uploaded successfully"
 
       - name: Upload CodeQL Database to Azure Storage
-        if: ${{ steps.validate_azure.outputs.upload_to_azure == 'true' && hashFiles('codeql-export/codeql-database-python.tar.gz') != '' }}
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles('codeql-export/codeql-database-python.tar.gz') != '' }}
         uses: azure/CLI@v2
         with:
           inlineScript: |
@@ -564,25 +572,25 @@ jobs:
 
       # ---------- Upload each artifact as a single file ----------
       - name: Upload SBOM artifact
-        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('sbom.cyclonedx.json') != '' }}
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.SBOM_SRC) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: sbom-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: sbom.cyclonedx.json
+          path: ${{ env.SBOM_SRC }}
 
       - name: Upload Trivy JSON artifact
-        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('trivy-report.json') != '' }}
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.TRIVY_SRC) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: trivy-json-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: trivy-report.json
+          path: ${{ env.TRIVY_SRC }}
 
       - name: Upload Trivy SARIF artifact
-        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('trivy-results.sarif') != '' }}
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.SARIF_SRC) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: trivy-sarif-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: trivy-results.sarif
+          path: ${{ env.SARIF_SRC }}
 
       - name: Upload CodeQL Database artifact
         if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('codeql-export/codeql-database-python.tar.gz') != '' }}
@@ -670,12 +678,12 @@ jobs:
                 }
               },
               deployment: { aci: { name: $aciName, resourceGroup: $aciRg, url: $aciUrl } }
-            }' > run.json
-          test -s run.json
-          ls -l run.json
+            } > "${RUNJSON_SRC}"
+          test -s "${RUNJSON_SRC}"
+          ls -l "${RUNJSON_SRC}"
 
       - name: Upload RUN JSON to Azure Storage (flat name)
-        if: ${{ steps.validate_azure.outputs.upload_to_azure == 'true' }}
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
         uses: azure/CLI@v2
         with:
           inlineScript: |
@@ -683,22 +691,22 @@ jobs:
             az cloud set --name AzureUSGovernment
             az cloud show
             echo "Uploading run.json to Azure Storage..."
-            test -s run.json || { echo "Error: run.json not found or empty"; pwd; ls -la; exit 2; }
+            test -s "${RUNJSON_SRC}" || { echo "Error: ${RUNJSON_SRC} not found or empty"; pwd; ls -la; exit 2; }
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "${{ steps.cfg.outputs.cn_runs || 'runs' }}" \
-              --name "${{ env.RUNJSON_SRC }}" \
-              --file "${{ env.RUNJSON_SRC }}" \
+              --name "${RUNJSON_SRC}" \
+              --file "${RUNJSON_SRC}" \
               --overwrite true
             echo "run.json uploaded successfully"
 
       - name: Upload RUN JSON artifact
-        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles('run.json') != '' }}
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.RUNJSON_SRC) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: swft-run-json-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: run.json
+          path: ${{ env.RUNJSON_SRC }}
 
       - name: Azure upload summary
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
@@ -779,6 +787,42 @@ jobs:
             "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
             -o security-reports/sonarqube.json
         continue-on-error: true
+        
+      #Upload Sonarqube results to scan container
+      - name: Upload SonarQube JSON to Azure Storage
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
+        uses: azure/CLI@v2
+        env:
+          AZURE_STORAGE_ACCOUNT: ${{ env.AZURE_STORAGE_ACCOUNT }}
+          AZ_SAS_TOKEN_STORAGE: ${{ env.AZ_SAS_TOKEN_STORAGE }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          RUN_ID: ${{ env.RUN_ID }}
+        with:
+          inlineScript: |
+            set -euo pipefail
+
+            az cloud set --name AzureUSGovernment
+            az cloud show
+
+            SONAR_SRC="security-reports/sonarqube.json"
+            SONAR_BLOB="sonarqube_${PROJECT_NAME}_${RUN_ID}.json"
+
+            if [ ! -f "$SONAR_SRC" ]; then
+              echo "::warning::SonarQube report not found, skipping upload"
+              exit 0
+            fi
+
+            echo "Uploading SonarQube report to Azure..."
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "scans" \
+              --name "$SONAR_BLOB" \
+              --file "$SONAR_SRC" \
+              --overwrite true
+            
+            echo "SonarQube report uploaded to Azure"
+
 
       - name: Checkout SCAI CTF Engine
         uses: actions/checkout@v4
@@ -805,7 +849,6 @@ jobs:
           echo ""
           
           # CodeQL SARIF is extracted from the artifact zip
-          # The artifact contains files from codeql-export/*.sarif
           CODEQL_SARIF=$(ls security-reports/*.sarif 2>/dev/null | grep -v trivy | head -1)
           
           if [ -z "$CODEQL_SARIF" ]; then
@@ -816,14 +859,22 @@ jobs:
             echo "✓ Found CodeQL SARIF: $CODEQL_SARIF"
           fi
           
-          echo "✓ Using Trivy JSON: security-reports/trivy-report.json"
+          TRIVY_JSON=$(ls security-reports/*trivy-report.json 2>/dev/null | head -1)
+          if [ -z "$TRIVY_JSON" ]; then
+            echo "⚠️ No Trivy JSON file found, creating empty placeholder"
+            TRIVY_JSON="security-reports/empty-trivy.json"
+            echo '{"Results":[]}' > "$TRIVY_JSON"
+          else
+            echo "✓ Using Trivy JSON: $TRIVY_JSON"
+          fi
+
           echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
           echo ""
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
             --SonarqubeFilePath security-reports/sonarqube.json \
-            --TrivyFilePath security-reports/trivy-report.json \
+            --TrivyFilePath "$TRIVY_JSON" \
             --OutputPath security-reports \
             --BuildId ${{ github.run_id }} \
             --Project ${{ env.PROJECT_NAME }}
