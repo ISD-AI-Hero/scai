@@ -807,7 +807,7 @@ jobs:
             az cloud show
 
             SONAR_SRC="security-reports/sonarqube.json"
-            SONAR_BLOB="sonarqube_${PROJECT_NAME}_${RUN_ID}.json"
+            SONAR_BLOB="${PROJECT_NAME}_${RUN_ID}_sonarqube_scan.json"
 
             if [ ! -f "$SONAR_SRC" ]; then
               echo "::warning::SonarQube report not found, skipping upload"
