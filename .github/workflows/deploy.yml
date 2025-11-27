@@ -678,7 +678,7 @@ jobs:
                 }
               },
               deployment: { aci: { name: $aciName, resourceGroup: $aciRg, url: $aciUrl } }
-            } > "${RUNJSON_SRC}"
+            }' > "${RUNJSON_SRC}"
           test -s "${RUNJSON_SRC}"
           ls -l "${RUNJSON_SRC}"
 
@@ -787,7 +787,7 @@ jobs:
             "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
             -o security-reports/sonarqube.json
         continue-on-error: true
-        
+
       #Upload Sonarqube results to scan container
       - name: Upload SonarQube JSON to Azure Storage
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_to_azure == true || github.event_name != 'workflow_dispatch' }}
