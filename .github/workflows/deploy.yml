@@ -358,6 +358,8 @@ jobs:
 
 
       - name: Sign image (keyed)
+        env:
+          COSIGN_YES: "true"   # <- auto-answer "yes" to prompts
         run: |
           set -euo pipefail
           REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
