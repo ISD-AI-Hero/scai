@@ -464,7 +464,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
         uses: actions/setup-go@v5
         with:
-          go-version: '1.21'
+          go-version: '1.23'
 
       - name: Install vexLLM
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
