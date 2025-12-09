@@ -458,7 +458,7 @@ jobs:
       - name: Verify Trivy JSON exists
         run: |
           set -euo pipefail
-          test -s "trivy-report.json" || { echo "Trivy JSON not created"; ls -la; exit 2; }
+          test -s "${TRIVY_SRC}" || { echo "Trivy JSON not created"; ls -la; exit 2; }
 
       - name: Set up Go (for vexLLM)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_vexllm != false || (github.event_name != 'workflow_dispatch' && (vars.ENABLE_VEXLLM != 'false')) }}
@@ -520,7 +520,7 @@ jobs:
           
           # Generate OpenVEX format
           echo "Generating OpenVEX document with vexLLM..."
-          vexllm generate trivy-report.json vex-output.openvex \
+          vexllm generate "${TRIVY_SRC}" vex-output.openvex \
             --output-format=openvex \
             --llm=openai \
             $VEX_FLAGS
