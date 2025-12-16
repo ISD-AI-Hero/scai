@@ -74,6 +74,7 @@ env:
   SARIF_SRC:    trivy-results.sarif
   DEPLOY_SRC:   aci-endpoint.txt
   RUNJSON_SRC:  run.json
+  INSPECT_SRC:  docker-inspect.json
 
 jobs:
   build-and-upload:
@@ -274,6 +275,7 @@ jobs:
             echo "CODEQL_DB_FILE=${FILE_PREFIX}-codeql-db.tar.gz"
             echo "DEPLOY_FILE=${FILE_PREFIX}-deploy.txt"
             echo "RUN_JSON_FILE=${FILE_PREFIX}-run.json"
+            echo "INSPECT_SRC=${FILE_PREFIX}-docker-inspect.json"
 
             # Override the generic names so all later steps use run-scoped filenames
             echo "SBOM_SRC=${FILE_PREFIX}-sbom.cyclonedx.json"
@@ -344,6 +346,15 @@ jobs:
           set -euo pipefail
           DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' "${ACR_LOGIN_SERVER}/${IMAGE_NAME}:${IMAGE_TAG}" | awk -F'@' '{print $2}')
           echo "IMAGE_DIGEST=$DIGEST" >> $GITHUB_ENV
+      
+      - name: Docker Inspect Image (save JSON)
+        run: |
+            set -euo pipefail
+            REF="${ACR_LOGIN_SERVER}/${IMAGE_NAME}@${IMAGE_DIGEST}"
+            echo "Inspecting: $REF"
+            docker inspect "$REF" > "${INSPECT_SRC}"
+            test -s "${INSPECT_SRC}"
+            ls -la "${INSPECT_SRC}"
 
       - name: Install Cosign
         uses: sigstore/cosign-installer@v3.9.0
@@ -510,6 +521,33 @@ jobs:
         # category intentionally omitted (single SARIF)
 
       # ---------- Azure uploads (work on push and manual; FLAT filenames) ----------
+      - name: Upload Docker inspect JSON to Azure Storage 
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show 
+            SUFFIX="$(az cloud show --query suffixes.storageEndpoint -o tsv)"
+
+            CN="${{ steps.cfg.outputs.cn_scan || 'scans' }}"
+            test -s "${INSPECT_SRC}" || { echo "Inspect JSON missing"; ls -la; exit 2; }
+
+            echo "Uploading the inspect.json to azure storage..."
+
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "$CN" \
+              --name "${INSPECT_SRC}" \
+              --file "${INSPECT_SRC}" \
+              --overwrite true
+            
+            echo "Docker inspect json uploaded successfully"
+
+            echo "DOCKER_INSPECT_URL=https://${AZURE_STORAGE_ACCOUNT}.blob.${SUFFIX}/${CN}/${INSPECT_SRC}" >> $GITHUB_ENV
+      
       - name: Upload SBOM to Azure Storage (SAS)
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
         uses: azure/CLI@v2
