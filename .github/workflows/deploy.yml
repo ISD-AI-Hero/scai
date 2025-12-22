@@ -583,7 +583,7 @@ jobs:
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "$CN" \
               --name "$SIG" \
-              --file "$SIG" \
+              --file "$SIG" 
       
       - name: Upload SBOM to Azure Storage (SAS)
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
@@ -618,7 +618,7 @@ jobs:
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "${{ steps.cfg.outputs.cn_sbom || 'sboms' }}" \
               --name "$SIG" \
-              --file "$SIG" \
+              --file "$SIG" 
 
       - name: Upload Trivy report to Azure Storage (flat name)
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
@@ -655,6 +655,22 @@ jobs:
               --file "$SIG"
             echo "Trivy JSON signature uploaded successfully"
 
+      - name: Upload Trivy SARIF to Azure Storage
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "${{ steps.cfg.outputs.cn_scan || 'scans' }}" \
+              --name "${SARIF_SRC}" \
+              --file "${SARIF_SRC}" \
+              --overwrite true
+
       - name: Upload Trivy SARIF signature to Azure Storage
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles(format('{0}.sig', env.SARIF_SRC)) != '' }}
         uses: azure/CLI@v2
@@ -671,17 +687,6 @@ jobs:
               --name "$SIG" \
               --file "$SIG"
             echo "Trivy SARIF signature uploaded successfully"
-
-      - name: Cosign sign CodeQL DB tarball
-        if: ${{ hashFiles(env.CODEQL_DB_FILE) != '' }}
-        env:
-          COSIGN_YES: "true"
-        run: |
-          set -euo pipefail
-          ARTIFACT="${CODEQL_DB_FILE}"
-          cosign sign-blob --key cosign.key --output-signature "${ARTIFACT}.sig" "${ARTIFACT}"
-          ls -l "${ARTIFACT}.sig"
-          echo "CODE QL Artifact signed succesfully"
 
       - name: Upload CodeQL Database to Azure Storage
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles('codeql-export/codeql-database-python.tar.gz') != '' }}
@@ -707,6 +712,17 @@ jobs:
             # Store URL for later use
             CODEQL_DB_URL="https://$AZURE_STORAGE_ACCOUNT.blob.core.windows.net/${{ steps.cfg.outputs.cn_scan || 'scans' }}/${CODEQL_DB_FILE}"
             echo "CODEQL_DB_URL=$CODEQL_DB_URL" >> $GITHUB_ENV
+
+      - name: Cosign sign CodeQL DB tarball
+        if: ${{ hashFiles(env.CODEQL_DB_FILE) != '' }}
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          ARTIFACT="${CODEQL_DB_FILE}"
+          cosign sign-blob --key cosign.key --output-signature "${ARTIFACT}.sig" "${ARTIFACT}"
+          ls -l "${ARTIFACT}.sig"
+          echo "CODE QL Artifact signed succesfully"
 
       - name: Upload CodeQL DB signature to Azure Storage
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles(format('{0}.sig', env.CODEQL_DB_FILE)) != '' }}
@@ -763,11 +779,11 @@ jobs:
           path: codeql-export/*.sarif
 
       - name: Upload Docker Inspect artifact
-        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.DOCKER_INSPECT_SRC) != '' }}
+        if: ${{ always() && steps.cfg.outputs.upload_artifacts == 'true' && hashFiles(env.INSPECT_SRC) != '' }}
         uses: actions/upload-artifact@v4
         with:
           name: docker-inspect-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}
-          path: ${{ env.DOCKER_INSPECT_SRC }}
+          path: ${{ env.INSPECT_SRC }}
 
       # ---------- Build RUN JSON AFTER Azure uploads & Deploy ----------
       - name: Ensure jq present (for RUN JSON)
@@ -1004,15 +1020,6 @@ jobs:
           chmod 600 cosign.key
           chmod 644 cosign.pub
 
-      - name: Decode Cosign keys
-        run: |
-          set -euo pipefail
-          echo "${{ secrets.COSIGN_KEY_B64 }}" | base64 -d > cosign.key
-          echo "${{ secrets.COSIGN_PUB_KEY_B64 }}" | base64 -d > cosign.pub
-          chmod 600 cosign.key
-          chmod 644 cosign.pub
-
-
       # Download artifacts from previous job
       - name: Download CodeQL SARIF
         uses: actions/download-artifact@v4
@@ -1103,19 +1110,29 @@ jobs:
         env:
           AZURE_STORAGE_ACCOUNT: ${{ env.AZURE_STORAGE_ACCOUNT }}
           AZ_SAS_TOKEN_STORAGE: ${{ env.AZ_SAS_TOKEN_STORAGE }}
+          PROJECT_NAME: ${{ env.PROJECT_NAME }}
+          RUN_ID: ${{ env.RUN_ID }}
         with:
           inlineScript: |
             set -euo pipefail
             az cloud set --name AzureUSGovernment
+
             SIG="security-reports/sonarqube.json.sig"
             test -s "$SIG"
+
+            SONAR_BLOB="${PROJECT_NAME}_${RUN_ID}_sonarqube_scan.json"
+            SIG_BLOB="${SONAR_BLOB}.sig"
+
             az storage blob upload \
               --account-name "$AZURE_STORAGE_ACCOUNT" \
               --sas-token "$AZ_SAS_TOKEN_STORAGE" \
               --container-name "scans" \
-              --name "$(basename "$SIG")" \
-              --file "$SIG" 
-            echo "Succesfully uploaded sonarqube signature in final assesment"
+              --name "$SIG_BLOB" \
+              --file "$SIG" \
+              --overwrite true
+
+            echo "Successfully uploaded SonarQube signature"
+
 
       - name: Checkout SCAI CTF Engine
         uses: actions/checkout@v4
