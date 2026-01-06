@@ -1254,6 +1254,11 @@ jobs:
           else
             echo "::warning::Azure CLI not found on runner; skipping az sanity check"
           fi
+      - name: Dump identity-related env (safe)
+        run: |
+          set -euo pipefail
+          echo "=== Identity env (filtered) ==="
+          env | sort | egrep -i '^(AZURE_|ACTIONS_ID_TOKEN|OIDC|MSI|IDENTITY|IMDS|DOTNET_|ASPNETCORE_)' || true
 
       # Run Final Assessment
       - name: Run SCAI CTF Engine Final Assessment
@@ -1261,6 +1266,9 @@ jobs:
           SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
+          AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
+          AZURE_IDENTITY_DISABLE_WORKLOAD_IDENTITY: "true"
+          AZURE_IDENTITY_DISABLE_MANAGED_IDENTITY: "true"
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
