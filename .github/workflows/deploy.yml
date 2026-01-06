@@ -1229,16 +1229,46 @@ jobs:
           cd SCAI_CTF_Engine/SCAI.CTF.Engine
           dotnet publish -c Release -o ../../scai-engine
 
+      - name: Dump identity-related env (safe)
+        run: |
+          set -euo pipefail
+          echo "=== Identity env (filtered) ==="
+          env | sort | egrep -i '^(AZURE_|ACTIONS_ID_TOKEN|OIDC|MSI|IDENTITY|IMDS|DOTNET_|ASPNETCORE_)' || true
+
+      - name: Force fresh Azure CLI auth (Gov) for Key Vault
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+        run: |
+          set -euo pipefail
+          rm -rf "$AZURE_CONFIG_DIR"
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          az cloud set --name AzureUSGovernment
+          az cloud show --query "{name:name, ad:endpoints.activeDirectory}" -o jsonc
+
+          # Pick ONE login method:
+          # If your VM has a managed identity:
+          az login --identity -o none
+
+          # If you use SP instead, do:
+          # az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" -o none
+
+          echo "=== KV token smoke test ==="
+          az account get-access-token \
+            --resource https://vault.usgovcloudapi.net \
+            --query "{tenant:tenant, expiresOn:expiresOn}" -o jsonc
+
       # Run Final Assessment
       - name: Run SCAI CTF Engine Final Assessment
         env:
           SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
-          #Because there are Github Actions OIDC env variables, we need to disable workload identity this is what is happening with these 3 below
+          #Because there are Github Actions OIDC env variables, we need to disable workload identity this is what is happening with the 3 below
           AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
           AZURE_IDENTITY_DISABLE_WORKLOAD_IDENTITY: "true"
           AZURE_IDENTITY_DISABLE_MANAGED_IDENTITY: "true"
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
