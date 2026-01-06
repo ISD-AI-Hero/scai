@@ -260,6 +260,28 @@ jobs:
           echo "📂 Exported files in $EXPORT_DIR:"
           ls -la "$EXPORT_DIR"
 
+      - name: Normalize CodeQL SARIF filename
+        if: always()
+        run: |
+          set -euo pipefail
+
+          # Find CodeQL SARIF copied into codeql-export/
+          CODEQL_SARIF_IN=$(ls -1 codeql-export/*.sarif 2>/dev/null | grep -vi trivy | head -1 || true)
+
+          if [ -z "$CODEQL_SARIF_IN" ]; then
+            echo "⚠️ No CodeQL SARIF found in codeql-export/"
+            ls -la codeql-export || true
+            exit 0
+          fi
+
+          CODEQL_SARIF_OUT="${PROJECT_NAME}-${RUN_ID}-codeql.sarif"
+          cp "$CODEQL_SARIF_IN" "$CODEQL_SARIF_OUT"
+          test -s "$CODEQL_SARIF_OUT"
+
+          echo "CODEQL_SARIF_OUT=$CODEQL_SARIF_OUT" >> $GITHUB_ENV
+          echo "✅ CodeQL SARIF ready: $CODEQL_SARIF_OUT"
+          ls -la "$CODEQL_SARIF_OUT"
+
 
       # === Derive names ===
 
@@ -501,6 +523,19 @@ jobs:
             --output-signature "${ARTIFACT}.sig" \
             "${ARTIFACT}"
           ls -l "${ARTIFACT}.sig"
+
+      - name: Cosign sign CodeQL SARIF
+        if: ${{ env.CODEQL_SARIF_OUT != '' && hashFiles(env.CODEQL_SARIF_OUT) != '' }}
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature "${CODEQL_SARIF_OUT}.sig" \
+            "${CODEQL_SARIF_OUT}"
+          test -s "${CODEQL_SARIF_OUT}.sig"
+          ls -la "${CODEQL_SARIF_OUT}.sig"
       
           
 
@@ -670,6 +705,51 @@ jobs:
               --name "${SARIF_SRC}" \
               --file "${SARIF_SRC}" \
               --overwrite true
+            echo "Trivy SARIF uploaded successfully"
+
+      - name: Upload CodeQL SARIF to Azure Storage
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && env.CODEQL_SARIF_OUT != '' && hashFiles(env.CODEQL_SARIF_OUT) != '' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
+
+            CN="${{ steps.cfg.outputs.cn_scan || 'scans' }}"
+            test -s "${CODEQL_SARIF_OUT}"
+
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "$CN" \
+              --name "${CODEQL_SARIF_OUT}" \
+              --file "${CODEQL_SARIF_OUT}" \
+              --overwrite true
+
+            echo "✅ Uploaded CodeQL SARIF: ${CODEQL_SARIF_OUT}"
+          
+      - name: Upload CodeQL SARIF signature to Azure Storage
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && env.CODEQL_SARIF_OUT != '' && hashFiles(format('{0}.sig', env.CODEQL_SARIF_OUT)) != '' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+
+            CN="${{ steps.cfg.outputs.cn_scan || 'scans' }}"
+            SIG="${CODEQL_SARIF_OUT}.sig"
+            test -s "$SIG"
+
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "$CN" \
+              --name "$SIG" \
+              --file "$SIG" \
+              --overwrite true
+
+            echo "✅ Uploaded CodeQL SARIF signature: $SIG"
 
       - name: Upload Trivy SARIF signature to Azure Storage
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles(format('{0}.sig', env.SARIF_SRC)) != '' }}
