@@ -1233,6 +1233,7 @@ jobs:
           SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
+          AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
