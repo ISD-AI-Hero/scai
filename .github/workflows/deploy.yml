@@ -1074,6 +1074,8 @@ jobs:
     name: Final Security Assessment - CTF Engine
     needs: build-and-upload
     runs-on: self-hosted
+    env:
+      AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
     if: success()  # Only run if previous job succeeds
     defaults: { run: { shell: bash } }
     
@@ -1227,13 +1229,38 @@ jobs:
           cd SCAI_CTF_Engine/SCAI.CTF.Engine
           dotnet publish -c Release -o ../../scai-engine
 
+      - name: Gov cloud sanity check (Azure CLI + token)
+        run: |
+          set -euo pipefail
+
+          # Show any AZURE_* variables that might be influencing DefaultAzureCredential
+          echo "=== AZURE_* env ==="
+          env | sort | grep -E '^AZURE_' || true
+          echo ""
+
+          # Ensure the runner is pointed at Gov
+          if command -v az >/dev/null 2>&1; then
+            az cloud set --name AzureUSGovernment
+            az cloud show --query "{name:name, activeDirectory: endpoints.activeDirectory, vaultDns:suffixes.keyVaultDns}" -o jsonc
+
+            # If the VM has a managed identity, this should succeed
+            # (If it fails, at least you know MI auth isn't working on this runner.)
+            az login --identity >/dev/null 2>&1 || true
+
+            echo "=== Token test for Key Vault resource ==="
+            az account get-access-token \
+              --resource https://vault.usgovcloudapi.net \
+              --query "{tenant:tenant, expiresOn:expiresOn}" -o jsonc
+          else
+            echo "::warning::Azure CLI not found on runner; skipping az sanity check"
+          fi
+
       # Run Final Assessment
       - name: Run SCAI CTF Engine Final Assessment
         env:
           SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
-          AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
