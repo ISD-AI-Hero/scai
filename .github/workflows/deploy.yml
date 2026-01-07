@@ -1246,12 +1246,7 @@ jobs:
           az cloud set --name AzureUSGovernment
           az cloud show --query "{name:name, ad:endpoints.activeDirectory}" -o jsonc
 
-          # Pick ONE login method:
-          # If your VM has a managed identity:
           az login --identity -o none
-
-          # If you use SP instead, do:
-          # az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" --tenant "$AZURE_TENANT_ID" -o none
 
           echo "=== KV token smoke test ==="
           az account get-access-token \
