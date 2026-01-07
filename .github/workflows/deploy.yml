@@ -1261,9 +1261,8 @@ jobs:
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
           #Because there are Github Actions OIDC env variables, we need to disable workload identity this is what is happening with the 3 below
           AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
-          AZURE_IDENTITY_DISABLE_WORKLOAD_IDENTITY: "true"
-          AZURE_IDENTITY_DISABLE_MANAGED_IDENTITY: "true"
           AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          AZURE_IDENTITY_DISABLE_WORKLOAD_IDENTITY: "true"
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
@@ -1291,6 +1290,16 @@ jobs:
 
           echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
           echo ""
+
+          rm -rf "$AZURE_CONFIG_DIR"
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          az cloud set --name AzureUSGovernment
+          az login --identity -o none
+
+          echo "Cloud: $(az cloud show --query name -o tsv)"
+          az account get-access-token --resource https://vault.usgovcloudapi.net --query tenant -o tsv
+
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
