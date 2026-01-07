@@ -260,6 +260,28 @@ jobs:
           echo "📂 Exported files in $EXPORT_DIR:"
           ls -la "$EXPORT_DIR"
 
+      - name: Normalize CodeQL SARIF filename
+        if: always()
+        run: |
+          set -euo pipefail
+
+          # Find CodeQL SARIF copied into codeql-export/
+          CODEQL_SARIF_IN=$(ls -1 codeql-export/*.sarif 2>/dev/null | grep -vi trivy | head -1 || true)
+
+          if [ -z "$CODEQL_SARIF_IN" ]; then
+            echo "⚠️ No CodeQL SARIF found in codeql-export/"
+            ls -la codeql-export || true
+            exit 0
+          fi
+
+          CODEQL_SARIF_OUT="${PROJECT_NAME}-${RUN_ID}-codeql.sarif"
+          cp "$CODEQL_SARIF_IN" "$CODEQL_SARIF_OUT"
+          test -s "$CODEQL_SARIF_OUT"
+
+          echo "CODEQL_SARIF_OUT=$CODEQL_SARIF_OUT" >> $GITHUB_ENV
+          echo "✅ CodeQL SARIF ready: $CODEQL_SARIF_OUT"
+          ls -la "$CODEQL_SARIF_OUT"
+
 
       # === Derive names ===
 
@@ -501,6 +523,19 @@ jobs:
             --output-signature "${ARTIFACT}.sig" \
             "${ARTIFACT}"
           ls -l "${ARTIFACT}.sig"
+
+      - name: Cosign sign CodeQL SARIF
+        if: ${{ env.CODEQL_SARIF_OUT != '' && hashFiles(env.CODEQL_SARIF_OUT) != '' }}
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          cosign sign-blob \
+            --key cosign.key \
+            --output-signature "${CODEQL_SARIF_OUT}.sig" \
+            "${CODEQL_SARIF_OUT}"
+          test -s "${CODEQL_SARIF_OUT}.sig"
+          ls -la "${CODEQL_SARIF_OUT}.sig"
       
           
 
@@ -670,6 +705,51 @@ jobs:
               --name "${SARIF_SRC}" \
               --file "${SARIF_SRC}" \
               --overwrite true
+            echo "Trivy SARIF uploaded successfully"
+
+      - name: Upload CodeQL SARIF to Azure Storage
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && env.CODEQL_SARIF_OUT != '' && hashFiles(env.CODEQL_SARIF_OUT) != '' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+            az cloud show
+
+            CN="${{ steps.cfg.outputs.cn_scan || 'scans' }}"
+            test -s "${CODEQL_SARIF_OUT}"
+
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "$CN" \
+              --name "${CODEQL_SARIF_OUT}" \
+              --file "${CODEQL_SARIF_OUT}" \
+              --overwrite true
+
+            echo "✅ Uploaded CodeQL SARIF: ${CODEQL_SARIF_OUT}"
+          
+      - name: Upload CodeQL SARIF signature to Azure Storage
+        if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && env.CODEQL_SARIF_OUT != '' && hashFiles(format('{0}.sig', env.CODEQL_SARIF_OUT)) != '' }}
+        uses: azure/CLI@v2
+        with:
+          inlineScript: |
+            set -euo pipefail
+            az cloud set --name AzureUSGovernment
+
+            CN="${{ steps.cfg.outputs.cn_scan || 'scans' }}"
+            SIG="${CODEQL_SARIF_OUT}.sig"
+            test -s "$SIG"
+
+            az storage blob upload \
+              --account-name "$AZURE_STORAGE_ACCOUNT" \
+              --sas-token "$AZ_SAS_TOKEN_STORAGE" \
+              --container-name "$CN" \
+              --name "$SIG" \
+              --file "$SIG" \
+              --overwrite true
+
+            echo "✅ Uploaded CodeQL SARIF signature: $SIG"
 
       - name: Upload Trivy SARIF signature to Azure Storage
         if: ${{ steps.cfg.outputs.upload_to_azure == 'true' && hashFiles(format('{0}.sig', env.SARIF_SRC)) != '' }}
@@ -994,6 +1074,8 @@ jobs:
     name: Final Security Assessment - CTF Engine
     needs: build-and-upload
     runs-on: self-hosted
+    env:
+      AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
     if: success()  # Only run if previous job succeeds
     defaults: { run: { shell: bash } }
     
@@ -1147,12 +1229,40 @@ jobs:
           cd SCAI_CTF_Engine/SCAI.CTF.Engine
           dotnet publish -c Release -o ../../scai-engine
 
+      - name: Dump identity-related env (safe)
+        run: |
+          set -euo pipefail
+          echo "=== Identity env (filtered) ==="
+          env | sort | egrep -i '^(AZURE_|ACTIONS_ID_TOKEN|OIDC|MSI|IDENTITY|IMDS|DOTNET_|ASPNETCORE_)' || true
+
+      - name: Force fresh Azure CLI auth (Gov) for Key Vault
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+        run: |
+          set -euo pipefail
+          rm -rf "$AZURE_CONFIG_DIR"
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          az cloud set --name AzureUSGovernment
+          az cloud show --query "{name:name, ad:endpoints.activeDirectory}" -o jsonc
+
+          az login --identity -o none
+
+          echo "=== KV token smoke test ==="
+          az account get-access-token \
+            --resource https://vault.usgovcloudapi.net \
+            --query "{tenant:tenant, expiresOn:expiresOn}" -o jsonc
+
       # Run Final Assessment
       - name: Run SCAI CTF Engine Final Assessment
         env:
           SCAI_OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           SCAI_OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o' }}
           SCAI_OPENAI_ENDPOINT: ${{ secrets.OPENAI_ENDPOINT }}
+          #Because there are Github Actions OIDC env variables, we need to disable workload identity this is what is happening with the 3 below
+          AZURE_AUTHORITY_HOST: https://login.microsoftonline.us/
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+          AZURE_IDENTITY_DISABLE_WORKLOAD_IDENTITY: "true"
         run: |
           echo "=== Downloaded security reports ==="
           ls -la security-reports/
@@ -1180,6 +1290,16 @@ jobs:
 
           echo "✓ Using SonarQube JSON: security-reports/sonarqube.json"
           echo ""
+
+          rm -rf "$AZURE_CONFIG_DIR"
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          az cloud set --name AzureUSGovernment
+          az login --identity -o none
+
+          echo "Cloud: $(az cloud show --query name -o tsv)"
+          az account get-access-token --resource https://vault.usgovcloudapi.net --query tenant -o tsv
+
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
