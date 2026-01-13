@@ -1132,12 +1132,14 @@ jobs:
         continue-on-error: true
 
       # Fetch SonarQube results via API
-      - name: Download SonarQube Results
+      - name: Download & Show SonarQube Results
         run: |
           mkdir -p security-reports
           curl -u "${{ secrets.SONAR_TOKEN }}:" \
             "${{ secrets.SONAR_HOST_URL }}/api/issues/search?componentKeys=swft-python&types=VULNERABILITY,BUG,CODE_SMELL&statuses=OPEN" \
             -o security-reports/sonarqube.json
+          echo "=== First 30 lines of SonarQube report ==="
+          head -n 30 security-reports/sonarqube.json
         continue-on-error: true
 
       - name: Cosign sign SonarQube JSON
