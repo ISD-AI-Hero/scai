@@ -1302,9 +1302,20 @@ jobs:
           echo "Cloud: $(az cloud show --query name -o tsv)"
           az account get-access-token --resource https://vault.usgovcloudapi.net --query tenant -o tsv
 
+          echo "Checking both the docker and source path needed for final assesment"
+          DOCKER_BIN="$(command -v docker || true)"
+          SOURCE_PATH="${GITHUB_WORKSPACE}/python"
+
+          echo "Docker bin: ${DOCKER_BIN}"
+          echo "Source path: ${SOURCE_PATH}"
+          ls -la "${SOURCE_PATH}" | head -n 20 || true
+ 
+
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
+            --DockerPath "$DOCKER_BIN" \
+            --SourcePath "$SOURCE_PATH" \
             --SonarqubeFilePath security-reports/sonarqube.json \
             --TrivyFilePath "$TRIVY_JSON" \
             --OutputPath security-reports \
