@@ -1314,7 +1314,7 @@ jobs:
           
           ./scai-engine/SCAI.CTF.Engine \
             --CodeQLFilePath "$CODEQL_SARIF" \
-            --DockerPath "security-reports/docker-inspect-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}.json" \
+            --DockerPath "security-reports/docker-inspect-${{ env.PROJECT_NAME }}-${{ env.RUN_ID }}" \
             --SourcePath "$SOURCE_PATH" \
             --SonarqubeFilePath security-reports/sonarqube.json \
             --TrivyFilePath "$TRIVY_JSON" \
@@ -1493,6 +1493,7 @@ jobs:
           echo "::error::🚨 Critical security vulnerabilities detected! Deployment blocked."
           echo "::error::Review the final assessment report before proceeding."
           exit 1
+
 
 
 
